@@ -20,17 +20,21 @@ package main
 import (
 	"errors"
 	"log"
+	"sync"
+	"time"
 )
 
 // SessionManager keeps track of all sessions from creation, updating
 // to destroying.
 type SessionManager struct {
 	sessions map[string]Session
+	sync.Mutex
 }
 
 // Session stores the session's data
 type Session struct {
-	Data map[string]interface{}
+	Data        map[string]interface{}
+	TimeUpdated time.Time
 }
 
 // NewSessionManager creates a new sessionManager
@@ -39,18 +43,24 @@ func NewSessionManager() *SessionManager {
 		sessions: make(map[string]Session),
 	}
 
+	go m.SessionCleaner()
+
 	return m
 }
 
 // CreateSession creates a new session and returns the sessionID
 func (m *SessionManager) CreateSession() (string, error) {
+	m.Lock()
+	defer m.Unlock()
+
 	sessionID, err := MakeSessionID()
 	if err != nil {
 		return "", err
 	}
 
 	m.sessions[sessionID] = Session{
-		Data: make(map[string]interface{}),
+		Data:        make(map[string]interface{}),
+		TimeUpdated: time.Now(),
 	}
 
 	return sessionID, nil
@@ -63,6 +73,9 @@ var ErrSessionNotFound = errors.New("SessionID does not exists")
 // GetSessionData returns data related to session if sessionID is
 // found, errors otherwise
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
+	m.Lock()
+	defer m.Unlock()
+
 	session, ok := m.sessions[sessionID]
 	if !ok {
 		return nil, ErrSessionNotFound
@@ -72,6 +85,9 @@ func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{
 
 // UpdateSessionData overwrites the old session data with the new one
 func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]interface{}) error {
+	m.Lock()
+	defer m.Unlock()
+
 	_, ok := m.sessions[sessionID]
 	if !ok {
 		return ErrSessionNotFound
@@ -79,10 +95,25 @@ func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]int
 
 	// Hint: you should renew expiry of the session here
 	m.sessions[sessionID] = Session{
-		Data: data,
+		Data:        data,
+		TimeUpdated: time.Now(),
 	}
 
 	return nil
+}
+
+func (m *SessionManager) SessionCleaner() {
+	for {
+		time.Sleep(time.Second)
+		m.Lock()
+		for id, session := range m.sessions {
+			sinceUpdate := time.Since(session.TimeUpdated).Seconds()
+			if sinceUpdate > 5.0 {
+				delete(m.sessions, id)
+			}
+		}
+		m.Unlock()
+	}
 }
 
 func main() {
